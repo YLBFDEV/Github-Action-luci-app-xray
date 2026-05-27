@@ -1,0 +1,133 @@
+name: Build luci-app-xray
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false' # 建议平时设为 false，防止无意义的卡挂
+
+env:
+  SDK_URL: https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+  CONFIG_FILE: x86_64.config
+  DEPENDS_FILE: depends-ubuntu-2004
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt -qq update
+        
+        # 安全读取本地依赖文件并安装，防御 Windows 换行符
+        if [ -f "$DEPENDS_FILE" ]; then
+          echo "=====> 成功读取本地依赖文件: $DEPENDS_FILE <====="
+          sudo -E apt -qq install -y $(cat "$DEPENDS_FILE" | tr -d '\r')
+        else
+          echo "=====> 错误: 未找到依赖文件 $DEPENDS_FILE ！ <====="
+          exit 1
+        fi
+        
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        
+    - name: Download SDK
+      working-directory: /workdir
+      run: |
+        wget $SDK_URL -O sdk.tar.zst
+        mkdir sdk
+        tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
+        ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
+        
+    - name: Update feeds
+      run: cd sdk && ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: cd sdk && ./scripts/feeds install -a
+
+    - name: Clone luci-app-xray (移到 Feed 安装之后)
+      working-directory: /workdir/sdk
+      run: |
+        # 使用安全的次级自定义目录，完美避开 feed 软链接引发的 No rule/symlinks 冲突
+        if [ -d "package/custom-pkgs/luci-app-xray" ]; then
+          echo "=====> 清理已存在的旧源码..."
+          rm -rf package/custom-pkgs/luci-app-xray
+        fi
+        mkdir -p package/custom-pkgs
+        git clone https://github.com/yichya/luci-app-xray.git package/custom-pkgs/luci-app-xray
+        
+    - name: Load custom configuration
+      run: |
+        if [ -e "$CONFIG_FILE" ]; then
+          echo "发现自定义配置文件，正在应用..."
+          cp "$CONFIG_FILE" sdk/.config
+        else
+          echo "未发现自定义配置文件，将使用 SDK 默认基础配置。"
+        fi
+        
+    - name: Validate and Refresh Configuration
+      id: check_config
+      run: |
+        cd sdk
+        
+        # 强制在配置中勾选编译目标及其依赖项，避免依赖树崩溃或忽略类型重定义
+        sed -i '/CONFIG_PACKAGE_luci-app-xray/d' .config
+        echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
+        sed -i '/CONFIG_PACKAGE_xray-core/d' .config
+        echo "CONFIG_PACKAGE_xray-core=m" >> .config
+        
+        # 修复老旧的 ca-bundle
+        sed -i 's/CONFIG_PACKAGE_ca-bundle=m/CONFIG_PACKAGE_ca-bundle=y/g' .config
+        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+        
+        # 验证配置合法性。如果没有交互环境它会在这里报错触发下方的 SSH
+        make defconfig
+    
+    - name: SSH Debug on Configuration Failure (条件触发)
+      if: failure() && steps.check_config.outcome == 'failure'
+      uses: P3TERX/ssh2actions@v1.0.0
+      env:
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+
+    - name: Compile the luci-app-xray
+      env:
+         TERM: xterm
+      run: |
+        cd sdk
+        echo -e "$(nproc) thread compile"
+        
+        # 用更直观、安全的命令集替代之前的盲目并发
+        if ! make package/custom-pkgs/luci-app-xray/compile -j$(nproc); then
+          echo "=====> 多线程编译失败，正在自动切回单线程 V=sc 导出具体代码错误... <====="
+          make package/custom-pkgs/luci-app-xray/compile -j1 V=sc
+        fi
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@v4
+      with:
+        name: luci-app-xray
+        path: sdk/bin
+        
+    - name: Upload bin to release
+      uses: softprops/action-gh-release@v2
+      if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: "luci-app-xray-${{ github.run_id }}"
+        name: "luci-app-xray 编译产物"
+        files: |
+          sdk/bin/**/*.ipk
