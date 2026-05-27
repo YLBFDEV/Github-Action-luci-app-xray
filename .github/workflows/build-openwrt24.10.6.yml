@@ -38,24 +38,52 @@ jobs:
         tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
         ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
         
-    - name: Clone luci-app-xray
-      working-directory: /workdir/sdk
-      run: |
-        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+    #- name: Clone luci-app-xray
+    #  working-directory: /workdir/sdk
+    #  run: |
+    #    git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
         
     - name: Update feeds
       run: cd sdk && ./scripts/feeds update -a
 
     - name: Install feeds
       run: cd sdk && ./scripts/feeds install -a
-      
+
+    - name: Clone luci-app-xray (移到 Feed 安装之后)
+      working-directory: /workdir/sdk
+      run: |
+        # 如果 feed 安装时创建了同名目录，先强行删掉，确保用你指定的 Git 源码
+        rm -rf package/luci-app-xray
+        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+    
     - name: Load custom configuration
       run: |
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE sdk/.config
+        if [ -e "$CONFIG_FILE" ]; then
+          echo "发现自定义配置文件，正在应用..."
+          cp "$CONFIG_FILE" sdk/.config
+        else
+          echo "未发现自定义配置文件，将使用 SDK 默认配置。"
+        fi
         
-    - name: SSH connection to Actions
+    - name: Validate and Refresh Configuration
+      id: check_config
+      run: |
+        cd sdk
+        # 故意不加 TERM=xterm，且不给交互机会
+        # 如果有任何依赖冲突或需要弹窗，make defconfig 会在这里直接报错熔断
+        make defconfig
+    
+    - name: SSH Debug on Configuration Failure (条件触发)
+      # 核心魔法：只有当上一步 Validate 失败（即需要弹窗/报错）时，才会启动 SSH
+      if: failure() && steps.check_config.outcome == 'failure'
       uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
+      env:
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        
+    #- name: SSH connection to Actions
+    #  uses: P3TERX/ssh2actions@v1.0.0
+    #  if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
 
     - name: Fix Configuration and Defconfig
       run: |
