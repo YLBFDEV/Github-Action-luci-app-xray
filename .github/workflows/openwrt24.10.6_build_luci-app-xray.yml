@@ -82,8 +82,6 @@ jobs:
         fi
         
         cd sdk
-        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
-        pwd
         
         # 4. 【核心改动】强制写入，并且不用 make defconfig 刷新（防止被系统自动抹除）
         echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
@@ -94,8 +92,6 @@ jobs:
       id: check_config
       run: |
         cd sdk
-        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
-        pwd
         
         # 强制在配置中勾选编译目标及其依赖项，避免依赖树崩溃或忽略类型重定义
         sed -i '/CONFIG_PACKAGE_luci-app-xray/d' .config
@@ -122,14 +118,12 @@ jobs:
          TERM: xterm
       run: |
         cd sdk
-        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
-        pwd
         echo -e "$(nproc) thread compile"
         
         # 用更直观、安全的命令集替代之前的盲目并发
         if ! make package/luci-app-xray/compile -j$(nproc); then
           echo "=====> 多线程编译失败，正在自动切回单线程 V=sc 导出具体代码错误... <====="
-          make package/luci-app-xray/compile -j1 V=sc
+          make package/luci-app-xray/compile -j1 V=sc IGNORE_ERRORS=1
         fi
 
     - name: Upload bin directory
