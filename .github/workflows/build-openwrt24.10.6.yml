@@ -15,7 +15,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: self-hosted
 
     steps:
     - name: Checkout
@@ -26,7 +26,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt -qq update
-        sudo -E apt -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+        sudo -E apt -qq install $(curl -fsSL https://raw.githubusercontent.com/YLBFDEV/Github-Action-luci-app-xray/refs/heads/main/depends-ubuntu-2004)
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         
