@@ -13,7 +13,6 @@ env:
   SDK_URL: https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
   CONFIG_FILE: x86_64.config
   DEPENDS_FILE: depends-ubuntu-2004
-  # 强行让所有底层 JavaScript Actions 跑在 Node.js 24 上，规避下周的弃用警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
@@ -32,8 +31,6 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt -qq update
-        
-        # 安全读取本地依赖文件并安装
         if [ -f "$DEPENDS_FILE" ]; then
           echo "=====> 成功读取本地依赖文件: $DEPENDS_FILE <====="
           sudo -E apt -qq install -y $(cat "$DEPENDS_FILE" | tr -d '\r')
@@ -41,7 +38,6 @@ jobs:
           echo "=====> 错误: 未找到依赖文件 $DEPENDS_FILE ！ <====="
           exit 1
         fi
-        
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         
@@ -53,48 +49,37 @@ jobs:
         tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
         ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
 
-    - name: Inject Custom Feed and Install
+    - name: Link Repository & Refresh SDK Feeds
       working-directory: /workdir/sdk
       run: |
-        # 1. 干净清理，防止重复追加
-        sed -i '/luci_app_xray/d' feeds.conf.default
-        sed -i '/feed_packages_official/d' feeds.conf.default
+        # 1. 严格遵循文档：以 package/luci-app-xray 名字硬塞进 SDK 树
+        rm -rf package/luci-app-xray
+        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
         
-        # 2. 写入依赖源和目标源码源
-        echo "src-git-full feed_packages_official https://github.com/openwrt/packages.git;openwrt-24.10" >> feeds.conf.default
-        echo "src-git-full luci_app_xray https://github.com/yichya/luci-app-xray" >> feeds.conf.default
-        
-        # 3. 【核心修正】必须全盘更新（-a），以便 SDK 获取远程 xray-core 依赖的索引
+        # 2. 执行官方说明书指定的 Feeds 同步动作，让 SDK 识别子目录 Makefile
         ./scripts/feeds update -a
-        
-        # 4. 优先安装官方包索引，再安装自定义插件包
-        ./scripts/feeds install -a -p feed_packages_official
-        ./scripts/feeds install -a -p luci_app_xray
-        
-    - name: Load custom configuration
-      run: |
-        if [ -e "$CONFIG_FILE" ]; then
-          echo "发现自定义配置文件，正在应用..."
-          cp "$CONFIG_FILE" sdk/.config
-        else
-          echo "未发现自定义配置文件，将使用 SDK 默认基础配置。"
-          [ -f sdk/.config ] || (cd sdk && make defconfig)
-        fi
-        
-    - name: Validate and Refresh Configuration
-      id: check_config
+        ./scripts/feeds install -a
+
+    - name: Load and Refresh Configuration
       run: |
         cd sdk
+        if [ -e "$CONFIG_FILE" ]; then
+          echo "应用自定义配置文件..."
+          cp "$CONFIG_FILE" .config
+        else
+          [ -f .config ] || make defconfig
+        fi
         
-        # 强制在配置中勾选编译目标及其依赖项
+        # 3. 强行勾选该仓库衍生出的三个真实 OpenWrt 目标包
         sed -i '/CONFIG_PACKAGE_luci-app-xray/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-app-xray-status/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-app-xray-geodata/d' .config
+        
         echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
+        echo "CONFIG_PACKAGE_luci-app-xray-status=m" >> .config
+        echo "CONFIG_PACKAGE_luci-app-xray-geodata=m" >> .config
         
-        # 修复老旧的 ca-bundle 依赖冲突
-        sed -i 's/CONFIG_PACKAGE_ca-bundle=m/CONFIG_PACKAGE_ca-bundle=y/g' .config
-        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
-        
-        # 此时有了官方 feed 的支撑，defconfig 会完美通过并保留 luci-app-xray
+        # 4. 执行官方指定的验证固化命令
         make defconfig
     
     - name: SSH Debug on Configuration Failure (条件触发)
@@ -104,23 +89,29 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
 
-    - name: Compile the luci-app-xray
+    - name: Compile the luci-app-xray Packages
       env:
          TERM: xterm
       run: |
         cd sdk
         echo -e "$(nproc) thread compile"
         
-        # 顺正宗的 Makefile 树目标直接单包单编译
-        if ! make package/luci-app-xray/compile -j$(nproc); then
-          echo "=====> 多线程编译失败，正在自动切回单线程 V=sc 导出具体代码错误... <====="
-          make package/luci-app-xray/compile -j1 V=sc IGNORE_ERRORS=1
-        fi
+        # 5. 【终极修正】依次点名编译各个独立的子 Makefile 目标
+        # 优先编译核心 core，再编译 status 和 geodata
+        
+        echo "正在编译核心包 (core)..."
+        make package/luci-app-xray/core/compile -j$(nproc) || make package/luci-app-xray/core/compile -j1 V=sc IGNORE_ERRORS=1
+        
+        echo "正在编译状态包 (status)..."
+        make package/luci-app-xray/status/compile -j$(nproc) || make package/luci-app-xray/status/compile -j1 V=sc IGNORE_ERRORS=1
+        
+        echo "正在编译地理数据包 (geodata)..."
+        make package/luci-app-xray/geodata/compile -j$(nproc) || make package/luci-app-xray/geodata/compile -j1 V=sc IGNORE_ERRORS=1
 
     - name: Upload bin directory
       uses: actions/upload-artifact@v4
       with:
-        name: luci-app-xray
+        name: luci-app-xray-ipks
         path: sdk/bin
         
     - name: Upload bin to release
@@ -130,6 +121,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: "luci-app-xray-${{ github.run_id }}"
-        name: "luci-app-xray 编译产物"
+        name: "luci-app-xray 24.10 编译产物"
         files: |
           sdk/bin/**/*.ipk
