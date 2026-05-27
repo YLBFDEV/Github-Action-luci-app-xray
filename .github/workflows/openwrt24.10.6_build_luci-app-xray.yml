@@ -62,13 +62,13 @@ jobs:
     - name: Inject Custom Feed and Install
       working-directory: /workdir/sdk
       run: |
-        # 1. 恢复 feeds.conf.default 到干净状态，防止多次运行重复叠加
-        git checkout -- feeds.conf.default || true
+        # 1. 安全清理：如果之前有残留，先从配置中删掉旧的这一行，防止重复叠加
+        sed -i '/luci_app_xray/d' feeds.conf.default
         
         # 2. 严格按照官方指南：将仓库写入 feeds.conf.default
         echo "src-git-full luci_app_xray https://github.com/yichya/luci-app-xray" >> feeds.conf.default
         
-        # 3. 更新并只安装这个新增的 feed 里的全部内容
+        # 3. 更新并只安装这个新增的 feed
         ./scripts/feeds update luci_app_xray
         ./scripts/feeds install -a -p luci_app_xray
         
@@ -81,10 +81,21 @@ jobs:
           echo "未发现自定义配置文件，将使用 SDK 默认基础配置。"
         fi
         
+        cd sdk
+        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
+        pwd
+        
+        # 4. 【核心改动】强制写入，并且不用 make defconfig 刷新（防止被系统自动抹除）
+        echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
+        # 强制生成 package 的底层时间戳和编译软链接，但不做深度依赖熔断
+        make prepare-tmpinfo
+        
     - name: Validate and Refresh Configuration
       id: check_config
       run: |
         cd sdk
+        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
+        pwd
         
         # 强制在配置中勾选编译目标及其依赖项，避免依赖树崩溃或忽略类型重定义
         sed -i '/CONFIG_PACKAGE_luci-app-xray/d' .config
@@ -111,6 +122,8 @@ jobs:
          TERM: xterm
       run: |
         cd sdk
+        echo "=====> 当前 Linux 系统的绝对路径 (pwd) 是: <====="
+        pwd
         echo -e "$(nproc) thread compile"
         
         # 用更直观、安全的命令集替代之前的盲目并发
