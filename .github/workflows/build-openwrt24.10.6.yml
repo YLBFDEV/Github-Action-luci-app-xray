@@ -33,9 +33,9 @@ jobs:
     - name: Download SDK
       working-directory: /workdir
       run: |
-        wget $SDK_URL -O sdk.tar.xz
+        wget $SDK_URL -O sdk.tar.zst
         mkdir sdk
-        tar -xf sdk.tar.xz -C sdk --strip-components 1
+        tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
         ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
         
     - name: Clone luci-app-xray
