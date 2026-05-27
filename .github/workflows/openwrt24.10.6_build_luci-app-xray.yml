@@ -13,6 +13,8 @@ env:
   SDK_URL: https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
   CONFIG_FILE: x86_64.config
   DEPENDS_FILE: depends-ubuntu-2004
+  # 强行让所有底层 JavaScript Actions 跑在 Node.js 24 上
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
@@ -112,9 +114,9 @@ jobs:
         echo -e "$(nproc) thread compile"
         
         # 用更直观、安全的命令集替代之前的盲目并发
-        if ! make package/custom-pkgs/luci-app-xray/compile -j$(nproc); then
+        if ! make package/luci-app-xray/compile -j$(nproc); then
           echo "=====> 多线程编译失败，正在自动切回单线程 V=sc 导出具体代码错误... <====="
-          make package/custom-pkgs/luci-app-xray/compile -j1 V=sc
+          make package/luci-app-xray/compile -j1 V=sc
         fi
 
     - name: Upload bin directory
