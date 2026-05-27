@@ -1,4 +1,4 @@
-name: Build luci-app-xray
+name: Build luci-app-kms
 
 on:
   repository_dispatch:
@@ -7,11 +7,12 @@ on:
       ssh:
         description: 'SSH connection to Actions'
         required: false
-        default: 'true'
+        default: 'false'
         
 env:
   SDK_URL: https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
   CONFIG_FILE: x86_64.config
+  DEPENDS_FILE: depends-ubuntu-2004
 
 jobs:
   build:
@@ -26,7 +27,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt -qq update
-        sudo -E apt -qq install $(curl -fsSL https://raw.githubusercontent.com/YLBFDEV/Github-Action-luci-app-xray/refs/heads/main/depends-ubuntu-2004)
+        sudo -E apt -qq install -y $(cat "$DEPENDS_FILE" | tr -d '\r')
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         
@@ -38,10 +39,10 @@ jobs:
         tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
         ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
         
-    #- name: Clone luci-app-xray
+    #- name: Clone luci-app-kms
     #  working-directory: /workdir/sdk
     #  run: |
-    #    git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+    #    git clone https://github.com/gaoderby/luci-app-kms.git package/luci-app-kms
         
     - name: Update feeds
       run: cd sdk && ./scripts/feeds update -a
@@ -49,18 +50,21 @@ jobs:
     - name: Install feeds
       run: cd sdk && ./scripts/feeds install -a
 
-    - name: Clone luci-app-xray (移到 Feed 安装之后)
+    - name: Clone luci-app-kms (移到 Feed 安装之后)
       working-directory: /workdir/sdk
       run: |
         # 如果 feed 安装时创建了同名目录，先强行删掉，确保用你指定的 Git 源码
-        if [ -d "package/luci-app-xray" ]; then
-          echo "=====> 检测到已存在的 package/luci-app-xray 目录，正在清理..."
-          rm -rf package/luci-app-xray
+        if [ -d "package/luci-app-kms" ]; then
+          echo "=====> 检测到已存在的 package/luci-app-kms 目录，正在清理..."
+          rm -rf package/luci-app-kms
         else
-          echo "=====> package/luci-app-xray 目录不存在，无需清理。"
+          echo "=====> package/luci-app-kms 目录不存在，无需清理。"
         fi
         
-        git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
+        git clone https://github.com/gaoderby/luci-app-kms.git package/luci-app-kms
+        
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
     
     - name: Load custom configuration
       run: |
@@ -97,19 +101,19 @@ jobs:
         [ -f .config ] || make defconfig
         make defconfig
         
-    - name: Compile the luci-app-xray
+    - name: Compile the luci-app-kms
       id: compile
       env:
          TERM: xterm
       run: |
         cd sdk
         echo -e "$(nproc) thread compile"
-        make package/luci-app-xray/compile -j$(nproc) || make package/luci-app-xray/compile -j1 || make package/luci-app-xray/compile -j1 V=sc
+        make package/luci-app-kms/compile -j$(nproc) || make package/luci-app-kms/compile -j1 || make package/luci-app-kms/compile -j1 V=sc
 
     - name: Upload bin directory
       uses: actions/upload-artifact@main
       with:
-        name: luci-app-xray
+        name: luci-app-kms
         path: sdk/bin
         
     - name: Upload bin to release
