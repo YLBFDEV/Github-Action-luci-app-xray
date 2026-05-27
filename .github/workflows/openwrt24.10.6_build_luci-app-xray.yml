@@ -57,16 +57,18 @@ jobs:
     - name: Install feeds
       run: cd sdk && ./scripts/feeds install -a
 
-    - name: Clone luci-app-xray (移到 Feed 安装之后)
+    - name: Inject Custom Feed and Install
       working-directory: /workdir/sdk
       run: |
-        # 使用安全的次级自定义目录，完美避开 feed 软链接引发的 No rule/symlinks 冲突
-        if [ -d "package/custom-pkgs/luci-app-xray" ]; then
-          echo "=====> 清理已存在的旧源码..."
-          rm -rf package/custom-pkgs/luci-app-xray
-        fi
-        mkdir -p package/custom-pkgs
-        git clone https://github.com/yichya/luci-app-xray.git package/custom-pkgs/luci-app-xray
+        # 1. 恢复 feeds.conf.default 到干净状态，防止多次运行重复叠加
+        git checkout -- feeds.conf.default || true
+        
+        # 2. 严格按照官方指南：将仓库写入 feeds.conf.default
+        echo "src-git-full luci_app_xray https://github.com/yichya/luci-app-xray" >> feeds.conf.default
+        
+        # 3. 更新并只安装这个新增的 feed 里的全部内容
+        ./scripts/feeds update luci_app_xray
+        ./scripts/feeds install -a -p luci_app_xray
         
     - name: Load custom configuration
       run: |
