@@ -53,7 +53,13 @@ jobs:
       working-directory: /workdir/sdk
       run: |
         # 如果 feed 安装时创建了同名目录，先强行删掉，确保用你指定的 Git 源码
-        rm -rf package/luci-app-xray
+        if [ -d "package/luci-app-xray" ]; then
+          echo "=====> 检测到已存在的 package/luci-app-xray 目录，正在清理..."
+          rm -rf package/luci-app-xray
+        else
+          echo "=====> package/luci-app-xray 目录不存在，无需清理。"
+        fi
+        
         git clone https://github.com/yichya/luci-app-xray.git package/luci-app-xray
     
     - name: Load custom configuration
@@ -88,6 +94,7 @@ jobs:
     - name: Fix Configuration and Defconfig
       run: |
         cd sdk
+        make package/symlinks
         [ -f .config ] || make defconfig
         make defconfig
         
@@ -98,7 +105,7 @@ jobs:
       run: |
         cd sdk
         echo -e "$(nproc) thread compile"
-        make package/luci-app-xray/compile -j$(nproc) || make package/luci-app-xray/compile -j1 || make package/luci-app-xray/compile -j1 V=s
+        make package/luci-app-xray/compile -j$(nproc) || make package/luci-app-xray/compile -j1 || make package/luci-app-xray/compile -j1 V=sc
 
     - name: Upload bin directory
       uses: actions/upload-artifact@main
