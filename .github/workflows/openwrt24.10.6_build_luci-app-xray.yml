@@ -113,6 +113,26 @@ jobs:
       with:
         name: luci-app-xray-ipks
         path: sdk/bin
+    
+    - name: Archive and Package IPKs
+      if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+      run: |
+        echo "=====> 正在精准抓取 luci-app-xray 相关的包... <====="
+        cd sdk/bin
+        
+        # 1. 寻找所有文件名包含 luci-app-xray 的 ipk 文件
+        TARGET_FILES=$(find . -name "*luci-app-xray*.ipk")
+        
+        if [ -z "$TARGET_FILES" ]; then
+          echo "=====> 错误：没有找到任何 luci-app-xray 相关的 ipk 文件！ <====="
+          exit 1
+        fi
+        
+        echo "=====> 发现以下相关安装包，准备打包： <====="
+        echo "$TARGET_FILES"
+        
+        # 2. 仅将这几个精准命中的 ipk 打包成压缩包
+        tar -zcvf /workdir/luci-app-xray-only.tar.gz $TARGET_FILES   
         
     - name: Upload bin to release
       uses: softprops/action-gh-release@v2
@@ -122,5 +142,5 @@ jobs:
       with:
         tag_name: "luci-app-xray-${{ github.run_id }}"
         name: "luci-app-xray 24.10 编译产物"
-        files: |
-          sdk/bin/**/*.ipk
+        # 🎯 仅上传这个只包含核心面板、status、geodata 插件的精简压缩包
+        files: /workdir/luci-app-xray-only.tar.gz
