@@ -59,6 +59,8 @@ jobs:
       
     - name: Compile the luci-app-xray
       id: compile
+      env:
+         TERM: xterm
       run: |
         cd sdk
         echo -e "$(nproc) thread compile"
