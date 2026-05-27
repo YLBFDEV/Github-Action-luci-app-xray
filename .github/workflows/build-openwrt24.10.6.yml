@@ -94,7 +94,6 @@ jobs:
     - name: Fix Configuration and Defconfig
       run: |
         cd sdk
-        make package/symlinks
         [ -f .config ] || make defconfig
         make defconfig
         
