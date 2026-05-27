@@ -7,13 +7,13 @@ on:
       ssh:
         description: 'SSH connection to Actions'
         required: false
-        default: 'false' # 建议平时设为 false，防止无意义的卡挂
+        default: 'false'
 
 env:
   SDK_URL: https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
   CONFIG_FILE: x86_64.config
   DEPENDS_FILE: depends-ubuntu-2004
-  # 强行让所有底层 JavaScript Actions 跑在 Node.js 24 上
+  # 强行让所有底层 JavaScript Actions 跑在 Node.js 24 上，规避下周的弃用警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
       run: |
         sudo -E apt -qq update
         
-        # 安全读取本地依赖文件并安装，防御 Windows 换行符
+        # 安全读取本地依赖文件并安装
         if [ -f "$DEPENDS_FILE" ]; then
           echo "=====> 成功读取本地依赖文件: $DEPENDS_FILE <====="
           sudo -E apt -qq install -y $(cat "$DEPENDS_FILE" | tr -d '\r')
@@ -52,24 +52,23 @@ jobs:
         mkdir sdk
         tar -I zstd -xf sdk.tar.zst -C sdk --strip-components 1
         ln -sf /workdir/sdk $GITHUB_WORKSPACE/sdk
-        
-    - name: Update feeds
-      run: cd sdk && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd sdk && ./scripts/feeds install -a
 
     - name: Inject Custom Feed and Install
       working-directory: /workdir/sdk
       run: |
-        # 1. 安全清理：如果之前有残留，先从配置中删掉旧的这一行，防止重复叠加
+        # 1. 干净清理，防止重复追加
         sed -i '/luci_app_xray/d' feeds.conf.default
+        sed -i '/feed_packages_official/d' feeds.conf.default
         
-        # 2. 严格按照官方指南：将仓库写入 feeds.conf.default
+        # 2. 写入依赖源和目标源码源
+        echo "src-git-full feed_packages_official https://github.com/openwrt/packages.git;openwrt-24.10" >> feeds.conf.default
         echo "src-git-full luci_app_xray https://github.com/yichya/luci-app-xray" >> feeds.conf.default
         
-        # 3. 更新并只安装这个新增的 feed
-        ./scripts/feeds update luci_app_xray
+        # 3. 【核心修正】必须全盘更新（-a），以便 SDK 获取远程 xray-core 依赖的索引
+        ./scripts/feeds update -a
+        
+        # 4. 优先安装官方包索引，再安装自定义插件包
+        ./scripts/feeds install -a -p feed_packages_official
         ./scripts/feeds install -a -p luci_app_xray
         
     - name: Load custom configuration
@@ -79,31 +78,23 @@ jobs:
           cp "$CONFIG_FILE" sdk/.config
         else
           echo "未发现自定义配置文件，将使用 SDK 默认基础配置。"
+          [ -f sdk/.config ] || (cd sdk && make defconfig)
         fi
-        
-        cd sdk
-        
-        # 4. 【核心改动】强制写入，并且不用 make defconfig 刷新（防止被系统自动抹除）
-        echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
-        # 强制生成 package 的底层时间戳和编译软链接，但不做深度依赖熔断
-        make prepare-tmpinfo
         
     - name: Validate and Refresh Configuration
       id: check_config
       run: |
         cd sdk
         
-        # 强制在配置中勾选编译目标及其依赖项，避免依赖树崩溃或忽略类型重定义
+        # 强制在配置中勾选编译目标及其依赖项
         sed -i '/CONFIG_PACKAGE_luci-app-xray/d' .config
         echo "CONFIG_PACKAGE_luci-app-xray=m" >> .config
-        sed -i '/CONFIG_PACKAGE_xray-core/d' .config
-        echo "CONFIG_PACKAGE_xray-core=m" >> .config
         
-        # 修复老旧的 ca-bundle
+        # 修复老旧的 ca-bundle 依赖冲突
         sed -i 's/CONFIG_PACKAGE_ca-bundle=m/CONFIG_PACKAGE_ca-bundle=y/g' .config
         echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
         
-        # 验证配置合法性。如果没有交互环境它会在这里报错触发下方的 SSH
+        # 此时有了官方 feed 的支撑，defconfig 会完美通过并保留 luci-app-xray
         make defconfig
     
     - name: SSH Debug on Configuration Failure (条件触发)
@@ -120,7 +111,7 @@ jobs:
         cd sdk
         echo -e "$(nproc) thread compile"
         
-        # 用更直观、安全的命令集替代之前的盲目并发
+        # 顺正宗的 Makefile 树目标直接单包单编译
         if ! make package/luci-app-xray/compile -j$(nproc); then
           echo "=====> 多线程编译失败，正在自动切回单线程 V=sc 导出具体代码错误... <====="
           make package/luci-app-xray/compile -j1 V=sc IGNORE_ERRORS=1
